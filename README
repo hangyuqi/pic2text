@@ -1,5 +1,2 @@
 1. python3 auto_capture.py 800 2                        screenshot 800 pictures each 2s
 2. python3 decode_qr.py ./screenshots/ ./CORE/dlink.    decode qrcode to ./dlink
-
-
-win change test
