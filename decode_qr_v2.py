@@ -340,10 +340,9 @@ def reassemble_file(fname, chunks, total, output_dir):
 
     missing = [i for i in range(1, total + 1) if i not in chunks]
     if missing:
-        if len(missing) <= 20:
-            print(f"  ❌ 缺少片段: {missing}")
-        else:
-            print(f"  ❌ 缺少 {len(missing)} 个片段: {missing[:10]}...{missing[-5:]}")
+        # 将缺失的整数列表转换为字符串，并使用空格连接，移除截断逻辑
+        missing_str = " ".join(str(x) for x in missing)
+        print(f"  ❌ 缺少 {len(missing)} 个片段: {missing_str}")
         return False
 
     payload = ''.join(chunks[i] for i in range(1, total + 1))

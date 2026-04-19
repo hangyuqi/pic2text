@@ -11,6 +11,7 @@
 1. **编码与合成**：在服务器上将文件转换为二维码，并合成一个自动轮播的 HTML 页面。
 2. **同步采集**：服务器全屏播放二维码，本地电脑同步进行定时全屏截图。
 3. **解析还原**：本地电脑扫描所有截图，提取二维码分片并还原原始文件。
+4. **错误重传**：本地电脑打印所有丢失的片段序列号，重新对丢失的序列号进行截图
 
 ---
 
@@ -25,11 +26,11 @@ python gen_terminal_qr_v2.py <目标路径> L --strip
 ```
 
 **2. 生成轮播页面**
-运行 `gen_slideshow_v2.py` 将生成的 SVG 文件夹合并为一个 HTML 轮播页面。
+运行 `gen_slideshow_matrix.py` 将生成的 SVG 文件夹合并为一个 HTML 轮播页面。
 ```bash
-python gen_slideshow_v2.py <二维码输出目录> [每张显示秒数]
-# 示例：每张显示 5 秒
-python gen_slideshow_v2.py qr_output_my_designs/ 5
+python gen_slideshow_matrix.py <二维码输出目录> [每张显示秒数] [列] [行]
+# 示例：每张显示 3 秒，每张3行5列
+python gen_slideshow_matrix.py qr_output_my_designs/ 3 5 3 
 ```
 
 **3. 启动播放**
@@ -61,6 +62,18 @@ python3 auto_capture.py 1000 2 ./screenshots/
 python3 decode_qr_v2.py <截图目录> [输出目录] [-jN]
 # 示例：使用 8 核并行解码
 python3 decode_qr_v2.py ./screenshots/ ./restored/ -j8
+```
+
+---
+
+### 第四阶段：错误重传（本地端）
+
+**6. 错误重传*
+运行 `gen_patch_slideshow.py` 将丢失的片段重新生成补丁html。
+```bash
+python3 gen_patch_slideshow.py [序列号1] [序列号2] ...
+# 示例：将序列号为9 1000 2000的片段重新生成补丁html，默认情况3x3
+python3 gen_patch_slideshow.py ./qr_output_my_designs 9 1000 2000
 ```
 
 ---

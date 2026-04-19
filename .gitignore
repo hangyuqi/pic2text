@@ -1,4 +1,4 @@
 # ignore svg image file 
-screenshots/
+screenshots*/
 *.mov
 *.mp4
