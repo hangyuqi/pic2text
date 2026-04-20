@@ -1,60 +1,104 @@
 #!/usr/bin/env python3
 """
-补丁轮播生成器（服务器端）- 支持参数配置
+补丁轮播生成器（服务器端）- 基于文件夹精准匹配 (支持 |ALL 整文件读取)
 
-用于在发现丢帧后，仅将缺失的二维码片段重新打包为 HTML 轮播页面。
+用于在发现丢帧后，读取包含文件名的报告文件，
+先定位目标文件专属的二维码文件夹，再提取缺失片段生成 HTML 轮播。
 
 用法: 
-    python gen_patch_slideshow.py <qr输出目录> [选项] <缺失序号1> <缺失序号2> ...
+    python gen_patch_slideshow.py <qr输出目录> -f <丢失报告文件> [选项]
 
 选项:
     -i, --interval  每屏显示秒数 (默认: 5)
     -c, --cols      矩阵列数 (默认: 3)
     -r, --rows      矩阵行数 (默认: 3)
-
-示例: 
-    # 默认 3x3 矩阵，5秒间隔
-    python gen_patch_slideshow.py qr_output_pdf/ 2549 2585 3481
-    
-    # 自定义 2x2 矩阵，每屏 3 秒
-    python gen_patch_slideshow.py qr_output_pdf/ -c 2 -r 2 -i 3 2549 2585 3481
+    -f, --file      读取 decode_qr 导出的 missing_patches.txt 文件 (格式: fname|1,2,3 或 fname|ALL)
 """
 
 import os
 import sys
 import argparse
 
-def generate_patch_slideshow(qr_output_dir, missing_indices, cols=3, rows=3, interval=5):
+def generate_patch_slideshow(qr_output_dir, missing_tasks, cols=3, rows=3, interval=5):
+    """
+    missing_tasks: list of tuples -> [(fname, idx), (fname, 'ALL'), ...]
+    """
     svg_contents = []
     
     print(f"📂 扫描目录: {qr_output_dir}")
     print(f"🔲 矩阵配置: {cols} 列 x {rows} 行 (间隔: {interval}秒)")
-    print(f"🔍 正在提取 {len(missing_indices)} 个缺失片段...")
-    
-    for idx in missing_indices:
-        # 兼容原脚本的 part_XXX.svg 命名规则
-        try:
-            fname = f"part_{int(idx):03d}.svg" 
-        except ValueError:
-            print(f"  ⚠️ 无效的序号格式，已跳过: {idx}")
+    print(f"🔍 正在执行精准提取策略...")
+
+    # 1. 将任务按文件名分组，避免重复查找文件夹
+    # 结构: { 'docker_image.tar': [12, 45, 67], 'script.sh': ['ALL'], ... }
+    tasks_by_file = {}
+    for fname, idx in missing_tasks:
+        if fname not in tasks_by_file:
+            tasks_by_file[fname] = []
+        tasks_by_file[fname].append(idx)
+
+    # 2. 预扫描子目录，建立文件夹名称映射表
+    dir_map = {}
+    for root, dirs, _ in os.walk(qr_output_dir):
+        # 记录每个文件夹的名称与其完整路径
+        folder_name = os.path.basename(root)
+        dir_map[folder_name] = root
+
+    # 3. 按文件粒度进行提取
+    for fname, indices in tasks_by_file.items():
+        fname_base = os.path.splitext(fname)[0]
+        target_dir = None
+        
+        # 寻找该文件对应的二维码文件夹
+        # 优先级1：文件夹名与完整文件名完全一致
+        if fname in dir_map:
+            target_dir = dir_map[fname]
+        # 优先级2：文件夹名与去掉后缀的文件名一致
+        elif fname_base in dir_map:
+            target_dir = dir_map[fname_base]
+        # 优先级3：子串包含匹配
+        else:
+            for dname, dpath in dir_map.items():
+                if fname_base in dname:
+                    target_dir = dpath
+                    break
+        
+        if not target_dir:
+            print(f"  ⚠️ 未找到 [{fname}] 对应的存放目录，已跳过")
             continue
             
-        # 遍历子目录寻找该文件
-        found = False
-        for root, _, files in os.walk(qr_output_dir):
-            if fname in files:
-                fpath = os.path.join(root, fname)
+        print(f"\n  📁 定位目录: {fname} -> {os.path.relpath(target_dir, qr_output_dir)}")
+        
+        # 4. 确定要提取的最终序号集合
+        target_indices = set()
+        if 'ALL' in indices:
+            # 扫描目录下所有的 part_xxx.svg
+            for filename in os.listdir(target_dir):
+                if filename.startswith("part_") and filename.endswith(".svg"):
+                    try:
+                        # 从 "part_001.svg" 中提取数字 1
+                        idx = int(filename[5:-4])
+                        target_indices.add(idx)
+                    except ValueError:
+                        pass
+            print(f"    🔄 识别到 ALL 标记，自动读取该目录下所有片段 (共 {len(target_indices)} 个)")
+        else:
+            target_indices = set(indices)
+
+        # 5. 在确定且唯一的目录下直接读取特定序号
+        for idx in sorted(target_indices):
+            target_part = f"part_{int(idx):03d}.svg"
+            fpath = os.path.join(target_dir, target_part)
+            
+            if os.path.exists(fpath):
                 with open(fpath, 'r', encoding='utf-8') as f:
                     svg_contents.append(f.read())
-                print(f"  ✅ 找到: {os.path.relpath(fpath, qr_output_dir)}")
-                found = True
-                break
-        
-        if not found:
-            print(f"  ⚠️ 未找到片段: {fname}")
+                print(f"    ✅ 提取成功: [{idx}] -> {target_part}")
+            else:
+                print(f"    ⚠️ 片段丢失: [{idx}] -> {target_part} (该文件在目录中不存在)")
 
     if not svg_contents:
-        print("❌ 没有找到任何指定的 SVG 文件，请检查目录和序号。")
+        print("\n❌ 没有找到任何指定的 SVG 文件，请检查目录和报告内容。")
         sys.exit(1)
 
     # ---------------------------------------------------------
@@ -143,12 +187,40 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--interval", type=int, default=5, help="每屏显示秒数 (默认: 5)")
     parser.add_argument("-c", "--cols", type=int, default=3, help="矩阵列数 (默认: 3)")
     parser.add_argument("-r", "--rows", type=int, default=3, help="矩阵行数 (默认: 3)")
-    parser.add_argument("indices", nargs="+", help="缺失的片段序号列表 (如: 12 45 67)")
+    parser.add_argument("-f", "--file", required=True, help="必需: 读取 decode_qr 导出的 missing_patches.txt 文件")
 
     args = parser.parse_args()
 
     if not os.path.isdir(args.qr_dir):
         print(f"❌ 目录不存在: {args.qr_dir}")
         sys.exit(1)
+        
+    missing_tasks = []
+    
+    if os.path.exists(args.file):
+        with open(args.file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or '|' not in line: 
+                    continue
+                parts = line.split('|', 1)
+                fname = parts[0].strip()
+                indices_str = parts[1].strip().upper()
+                
+                # 新增：处理 ALL 标记
+                if indices_str == 'ALL':
+                    missing_tasks.append((fname, 'ALL'))
+                else:
+                    for idx_str in indices_str.split(','):
+                        idx_str = idx_str.strip()
+                        if idx_str.isdigit():
+                            missing_tasks.append((fname, int(idx_str)))
+    else:
+        print(f"❌ 报告文件不存在: {args.file}")
+        sys.exit(1)
 
-    generate_patch_slideshow(args.qr_dir, args.indices, cols=args.cols, rows=args.rows, interval=args.interval)
+    if not missing_tasks:
+        print("❌ 错误：报告文件为空或格式不正确。")
+        sys.exit(1)
+        
+    generate_patch_slideshow(args.qr_dir, missing_tasks, cols=args.cols, rows=args.rows, interval=args.interval)

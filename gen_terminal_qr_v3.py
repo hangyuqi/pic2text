@@ -213,20 +213,37 @@ def process_single_file(file_path, error_level='L', strip=False):
         strip=strip,
     )
 
-    print()
-    print("=" * 55)
-    print("📊 汇总报告")
-    print("=" * 55)
+    success_files = 1 if count > 0 else 0
+
+    report_lines = [
+        "",
+        "=" * 55,
+        "📊 汇总报告",
+        "=" * 55
+    ]
     if count > 0:
-        print(f"  ✅ {fname}: {count} 个二维码")
+        report_lines.append(f"  ✅ {fname}: {count} 个二维码")
     elif count == 0:
-        print(f"  ⏭️  {fname}: 已跳过")
+        report_lines.append(f"  ⏭️  {fname}: 已跳过")
     else:
-        print(f"  ❌ {fname}: 生成失败")
-    print("-" * 55)
-    print(f"  📁 输出目录: {out_dir}/")
-    print(f"  🔢 二维码总数: {max(count, 0)}")
-    print("=" * 55)
+        report_lines.append(f"  ❌ {fname}: 生成失败")
+    
+    report_lines.extend([
+        "-" * 55,
+        f"  📁 输出目录: {out_dir}/",
+        f"  📄 成功处理文件数: {success_files} / 1",
+        f"  🔢 二维码总数: {max(count, 0)}",
+        "=" * 55
+    ])
+
+    report_text = "\n".join(report_lines)
+    print(report_text)
+
+    # 生成记录文件
+    log_file = os.path.join(out_dir, "generation_record.txt")
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(report_text)
+    print(f"  📝 记录文件已保存至: {log_file}")
 
 
 def process_directory(input_dir, error_level='L', strip=False):
@@ -290,21 +307,70 @@ def process_directory(input_dir, error_level='L', strip=False):
 
         print()
 
+    # ==========================================
+    # 新增逻辑：生成全局文件清单 (Manifest) 并二维码化
+    # ==========================================
+    manifest_name = "_manifest.txt"
+    manifest_path = os.path.join(root_out, manifest_name)
+    # 提取所有成功处理的文件相对路径
+    successful_files_list = [rel_path for rel_path, count in results if count not in ('FAILED', 'SKIPPED')]
+    
+    if successful_files_list:
+        print("=" * 55)
+        print("📝 生成全局文件清单 (Manifest)")
+        print("-" * 55)
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(successful_files_list))
+        
+        manifest_count = generate_svg_qr_chunked(
+            file_path=manifest_path,
+            out_dir=os.path.join(root_out, manifest_name),
+            error_level=error_level,
+            strip=False,
+            qr_name=manifest_name
+        )
+        
+        if manifest_count > 0:
+            results.append((manifest_name, manifest_count))
+            total_qr += manifest_count
+            print(f"  ✅ 清单文件已生成: {manifest_count} 个二维码")
+        else:
+            print(f"  ❌ 清单文件生成失败")
+        print()
+
     # 汇总报告
-    print("=" * 55)
-    print("📊 汇总报告")
-    print("=" * 55)
+    successful_files = 0
+    report_lines = [
+        "=" * 55,
+        "📊 汇总报告",
+        "=" * 55
+    ]
+
     for fname, count in results:
         if count == 'FAILED':
-            print(f"  ❌ {fname}: 生成失败")
+            report_lines.append(f"  ❌ {fname}: 生成失败")
         elif count == 'SKIPPED':
-            print(f"  ⏭️  {fname}: 已跳过")
+            report_lines.append(f"  ⏭️  {fname}: 已跳过")
         else:
-            print(f"  ✅ {fname}: {count} 个二维码")
-    print("-" * 55)
-    print(f"  📁 总输出目录: {root_out}/")
-    print(f"  🔢 二维码总数: {total_qr}")
-    print("=" * 55)
+            report_lines.append(f"  ✅ {fname}: {count} 个二维码")
+            successful_files += 1  # 统计成功处理的文件数
+
+    report_lines.extend([
+        "-" * 55,
+        f"  📁 总输出目录: {root_out}/",
+        f"  📄 成功处理文件数: {successful_files} / {len(all_files)}",
+        f"  🔢 二维码总数: {total_qr}",
+        "=" * 55
+    ])
+
+    report_text = "\n".join(report_lines)
+    print(report_text)
+
+    # 生成记录文件
+    log_file = os.path.join(root_out, "generation_record.txt")
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(report_text)
+    print(f"  📝 记录文件已保存至: {log_file}")
 
 
 if __name__ == "__main__":

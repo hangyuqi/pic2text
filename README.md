@@ -20,17 +20,17 @@
 ### 第一阶段：服务器端（断网环境）
 
 **1. 生成二维码（含压缩与纠错）**
-运行 `gen_terminal_qr_v2.py` 将目标文件/文件夹转换为一系列 SVG 二维码文件。在此步骤中，脚本会自动执行**智能压缩**（对比 LZMA 和 Zlib）以最大限度减少二维码数量，并允许设置**纠错等级**以应对截图时内网水印、早点以及屏幕反光。
+运行 `gen_terminal_qr_v3.py` 将目标文件/文件夹转换为一系列 SVG 二维码文件。在此步骤中，脚本会自动执行**智能压缩**（对比 LZMA 和 Zlib）以最大限度减少二维码数量，并允许设置**纠错等级**以应对截图时内网水印、早点以及屏幕反光。同时还会在生成文件夹中输出generation_record.txt文件记录生成的每份文件信息，以及_manifest.txt文件负责记录总共对哪些文件进行了编码，用于在接收端进行文件数量的比对。
 ```bash
-python gen_terminal_qr_v2.py <目标路径> L --strip
+python gen_terminal_qr_v3.py <目标路径> L --strip
 ```
 
 **2. 生成轮播页面**
-运行 `gen_slideshow_matrix.py` 将生成的 SVG 文件夹合并为一个 HTML 轮播页面。
+运行 `gen_slideshow_v3.py` 将生成的 SVG 文件夹合并为一个 HTML 轮播页面。支持用户输入行和列让每张页面显示更多的二维码从而加速截图过程。
 ```bash
-python gen_slideshow_matrix.py <二维码输出目录> [每张显示秒数] [列] [行]
-# 示例：每张显示 3 秒，每张3行5列
-python gen_slideshow_matrix.py qr_output_my_designs/ 3 5 3 
+python gen_slideshow_v3.py <二维码输出目录> [每张显示秒数] [列] [行]
+# 示例：每张显示 3 秒，每张3行5列共15张二维码
+python gen_slideshow_v3.py qr_output_my_designs/ 3 5 3 
 ```
 
 **3. 启动播放**
@@ -47,7 +47,7 @@ python gen_slideshow_matrix.py qr_output_my_designs/ 3 5 3
 运行 `auto_capture.py` 对服务器屏幕进行周期性截图。
 ```bash
 python3 auto_capture.py [截图总张数] [截图间隔秒数] [输出目录]
-# 示例：预计 340 张二维码，每 5 秒翻页 $\to$ 设置截图 1000 张，每 2 秒截一张
+# 示例：预计 340 张二维码，每 5 秒翻页 $\to$ 设置截图 1000 张，每 2 秒截一张（推荐在发送端3秒一张，则在接收端2秒截图，设置截图张数为发送端页数的二倍，确保能够对全部进行截图）
 python3 auto_capture.py 1000 2 ./screenshots/
 ```
 - **同步启动**：在 `auto_capture.py` 倒计时结束的同时，点击服务器页面上的 **[▶ 开始轮播]** 按钮。
@@ -57,11 +57,11 @@ python3 auto_capture.py 1000 2 ./screenshots/
 ### 第三阶段：数据还原（本地端）
 
 **5. 解析与恢复**
-运行 `decode_qr_v2.py` 对采集到的截图进行识别和文件还原。
+运行 `decode_qr_v3.py` 对采集到的截图进行识别和文件还原。对每个文件的完整性进行校验，以及对文件数量进行校验，解码完成后会在目标文件夹下生成missing_patches.txt文件，该文件记录了有缺失文件的缺失序号和缺失的文件。
 ```bash
-python3 decode_qr_v2.py <截图目录> [输出目录] [-jN]
+python3 decode_qr_v3.py <截图目录> [输出目录] [-jN]
 # 示例：使用 8 核并行解码
-python3 decode_qr_v2.py ./screenshots/ ./restored/ -j8
+python3 decode_qr_v3.py ./screenshots/ ./restored/ -j8
 ```
 
 ---
@@ -69,22 +69,20 @@ python3 decode_qr_v2.py ./screenshots/ ./restored/ -j8
 ### 第四阶段：错误重传（本地端）
 
 **6. 错误重传*
-运行 `gen_patch_slideshow.py` 将丢失的片段重新生成补丁html。
+运行 `gen_patch_slideshow.py` 将丢失的片段重新生成补丁html。在服务器端新建文件并将missing_patches.txt文件中的全部内容进行复制，脚本会读取文件中的信息并将缺失的所有二维码重新生成补丁html。
 ```bash
-python3 gen_patch_slideshow.py [序列号1] [序列号2] ...
-# 示例：将序列号为9 1000 2000的片段重新生成补丁html，默认情况3x3
-python3 gen_patch_slideshow.py ./qr_output_my_designs 9 1000 2000
+python3 gen_patch_slideshow.py -f missing_patches.txt -i 3
 ```
 
 ---
 
 ## 📦 工具详情
 
-### 1. `gen_terminal_qr_v2.py` (编码器)
+### 1. `gen_terminal_qr_v3.py` (编码器)
 - **功能**：文件 $\to$ 压缩 $\to$ Base64 $\to$ 二维码分片。
 - **特性**：支持 Verilog 专项优化（去注释/压空白），自动选择 LZMA/Zlib 最佳压缩率。
 
-### 2. `gen_slideshow_v2.py` (页面生成器)
+### 2. `gen_slideshow_v3.py` (页面生成器)
 - **功能**：SVG 文件夹 $\to$ `slideshow.html`。
 - **特性**：强制 SVG 1:1 正方形显示，防止浏览器拉伸；内置白屏闪烁机制作为帧分隔，提高识别率。
 
@@ -92,9 +90,12 @@ python3 gen_patch_slideshow.py ./qr_output_my_designs 9 1000 2000
 - **功能**：定时全屏截图 $\to$ PNG 图片。
 - **特性**：集成 `caffeinate` 防止 Mac 休眠；采样率高于翻页率，通过解码端自动去重确保数据完整。
 
-### 4. `decode_qr_v2.py` (解码器)
+### 4. `decode_qr_v3.py` (解码器)
 - **功能**：截图 $\to$ 识别 $\to$ 拼接 $\to$ 解压 $\to$ 原始文件。
 - **特性**：多引擎识别（pyzbar $\to$ zbar $\to$ OpenCV），多进程并行加速。
+
+### 5. `gen_patch_slideshow.py` (补丁页面生成器)
+- **功能**：读取文件missing_patches.txt $\to$ 重新生成补丁html文件。
 
 ---
 

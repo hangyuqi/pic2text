@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QR 码解码拼接工具 v3（Mac 端）- 多引擎识别 + 多进程加速
+QR 码解码拼接工具 v3（Mac 端）- 多引擎识别 + 多进程加速 + 缺失报告生成
 
 将所有截图一股脑丢进来（支持嵌套子目录），自动按文件名分组、排序、拼接、解压，还原所有原始文件。
 
@@ -19,21 +19,6 @@ QR 码解码拼接工具 v3（Mac 端）- 多引擎识别 + 多进程加速
     python3 decode_qr_v3.py ./screenshots/
     python3 decode_qr_v3.py ./screenshots/ ./restored/
     python3 decode_qr_v3.py ./screenshots/ ./restored/ -j8
-
-说明：
-    二维码分片格式: 相对路径|序号/总数|数据
-    脚本自动按路径分组，还原出多个独立文件，并保留原始目录层级。
-
-识别引擎优先级：
-    1. pyzbar（如果已安装） — 识别率最高
-    2. libzbar ctypes 直连（如果系统有 libzbar） — 等效于 pyzbar
-    3. OpenCV QRCodeDetectorAruco — 比原生 QRCodeDetector 更好
-    4. OpenCV QRCodeDetector + 多策略预处理 — 兜底方案
-
-性能优化：
-    - 多进程并行扫描（默认 CPU 核心数）
-    - zbar 路径下直接用灰度图，跳过不必要的 RGB 转换
-    - OpenCV 仅在 zbar 不可用时才加载
 """
 
 import os
@@ -48,7 +33,6 @@ import multiprocessing
 from functools import partial
 
 from PIL import Image
-
 
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
 
@@ -86,7 +70,6 @@ def _detect_engine():
     # 3. OpenCV
     return 'opencv'
 
-
 def _engine_display_name(engine):
     if engine == 'pyzbar':
         return 'pyzbar'
@@ -118,7 +101,6 @@ def _worker_init(engine_name):
     if engine_name == 'ctypes_zbar':
         _w_zbar_lib, _w_zbar_scanner = _init_ctypes_zbar()
     # pyzbar 和 opencv 不需要进程级初始化
-
 
 def _init_ctypes_zbar():
     """初始化 ctypes zbar 后端，返回 (lib, scanner)"""
@@ -168,11 +150,9 @@ def _init_ctypes_zbar():
 
     return zbar_lib, scanner
 
-
 def _scan_one_image(image_path):
     """
     Worker 函数：扫描单张图片，返回 (image_path, [decoded_texts])。
-    在子进程中执行，使用进程级全局解码器。
     """
     try:
         results = []
@@ -189,17 +169,13 @@ def _scan_one_image(image_path):
     except Exception as e:
         return (image_path, [])
 
-
 def _decode_pyzbar(image_path):
-    """pyzbar 解码 — 直接用灰度图"""
     from pyzbar.pyzbar import decode as pyzbar_decode
     img = Image.open(image_path).convert('L')
     results = pyzbar_decode(img)
     return [r.data.decode('utf-8') for r in results if r.data]
 
-
 def _decode_ctypes_zbar(image_path):
-    """ctypes zbar 解码 — 直接用灰度图，零拷贝"""
     gray = Image.open(image_path).convert('L')
     w, h = gray.size
     raw_data = gray.tobytes()
@@ -224,23 +200,18 @@ def _decode_ctypes_zbar(image_path):
     _w_zbar_lib.zbar_image_destroy(zimg)
     return results
 
-
 def _decode_opencv(image_path):
-    """OpenCV 解码 — 多检测器 + 多预处理，仅在 zbar 失败时调用"""
     import cv2
     import numpy as np
 
     try:
-        # 直接用 cv2 读取，比 PIL→numpy 转换更快
         img_bgr = cv2.imread(image_path)
         if img_bgr is None:
-            # 回退到 PIL（处理 cv2 不支持的路径编码）
             pil_img = Image.open(image_path).convert('RGB')
             img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     except Exception:
         return []
 
-    # 检测器列表
     detectors = []
     try:
         detectors.append(cv2.QRCodeDetectorAruco())
@@ -248,7 +219,6 @@ def _decode_opencv(image_path):
         pass
     detectors.append(cv2.QRCodeDetector())
 
-    # 图像变体（懒生成，找到即停）
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
 
@@ -290,12 +260,11 @@ def _decode_opencv(image_path):
                     pass
             if results:
                 return results
-
     return []
 
 
 # ============================================================
-# 文件收集与解析（与 v2 一致）
+# 文件收集、解析与实用工具
 # ============================================================
 
 def collect_images(scan_dir):
@@ -309,12 +278,9 @@ def collect_images(scan_dir):
     image_files.sort()
     return image_files
 
-
 def parse_qr_text(text):
     """
     解析二维码文本。
-    新格式: 文件名|序号/总数|数据
-    旧格式: 序号/总数|数据
     """
     parts = text.split('|')
 
@@ -334,15 +300,45 @@ def parse_qr_text(text):
 
     return (fname, idx, tot, data)
 
+def format_missing_ranges(missing_list):
+    """
+    将缺失的片段列表格式化为连续区间形式以提高可读性。
+    例如: [1, 2, 3, 5, 8, 9, 10] -> "1-3, 5, 8-10"
+    """
+    if not missing_list:
+        return ""
+    
+    missing_list = sorted(missing_list)
+    ranges = []
+    start = missing_list[0]
+    end = missing_list[0]
+    
+    for i in range(1, len(missing_list)):
+        if missing_list[i] == end + 1:
+            end = missing_list[i]
+        else:
+            if start == end:
+                ranges.append(str(start))
+            else:
+                ranges.append(f"{start}-{end}")
+            start = missing_list[i]
+            end = missing_list[i]
+            
+    if start == end:
+        ranges.append(str(start))
+    else:
+        ranges.append(f"{start}-{end}")
+        
+    return ", ".join(ranges)
 
 def reassemble_file(fname, chunks, total, output_dir):
     """将单个文件的所有分片拼接、解压、写入"""
 
     missing = [i for i in range(1, total + 1) if i not in chunks]
     if missing:
-        # 将缺失的整数列表转换为字符串，并使用空格连接，移除截断逻辑
-        missing_str = " ".join(str(x) for x in missing)
-        print(f"  ❌ 缺少 {len(missing)} 个片段: {missing_str}")
+        # 使用新的范围格式化方法输出当前文件的缺失提示
+        missing_str = format_missing_ranges(missing)
+        print(f"  ❌ 缺少 {len(missing)} 个片段: [{missing_str}]")
         return False
 
     payload = ''.join(chunks[i] for i in range(1, total + 1))
@@ -415,7 +411,6 @@ def decode_all(scan_dir, output_dir, num_workers):
     done = 0
 
     if num_workers <= 1:
-        # 单进程模式（调试用，或图片极少时）
         _worker_init(engine)
         results_iter = (_scan_one_image(f) for f in image_files)
     else:
@@ -424,7 +419,6 @@ def decode_all(scan_dir, output_dir, num_workers):
             initializer=_worker_init,
             initargs=(engine,)
         )
-        # imap_unordered: 谁先完成谁先返回，最大化吞吐
         results_iter = pool.imap_unordered(_scan_one_image, image_files, chunksize=4)
 
     try:
@@ -434,7 +428,6 @@ def decode_all(scan_dir, output_dir, num_workers):
 
             if not texts:
                 white_frames += 1
-                # 进度条形式，不逐行打印跳过的图
                 print(f"\r  ⏳ 进度: {done}/{total_images} (已识别 {scanned_count} 片)", end="", flush=True)
                 continue
 
@@ -498,11 +491,18 @@ def decode_all(scan_dir, output_dir, num_workers):
 
     success = 0
     fail = 0
+    
+    # 记录每个失败文件的具体缺失片段，用于最终报告
+    missing_reports = {}
 
     for fname in sorted(file_groups.keys()):
         info = file_groups[fname]
         tot = info['total']
         chunks = info['chunks']
+
+        missing = [i for i in range(1, tot + 1) if i not in chunks]
+        if missing:
+            missing_reports[fname] = missing
 
         print(f"\n  📄 {fname} ({len(chunks)}/{tot} 片)")
 
@@ -511,7 +511,7 @@ def decode_all(scan_dir, output_dir, num_workers):
         else:
             fail += 1
 
-    # ---------- 最终报告 ----------
+# ---------- 最终报告 ----------
     print()
     print("=" * 55)
     print("📊 最终结果")
@@ -521,37 +521,77 @@ def decode_all(scan_dir, output_dir, num_workers):
         print(f"  ❌ 还原失败: {fail} 个文件")
     print(f"  📁 输出目录: {output_dir}")
     print(f"  ⏱️  总耗时:   {elapsed:.1f}s")
+    
+    if missing_reports:
+        print("-" * 55)
+        print("⚠️  丢失片段详细报告:")
+        
+        # 收集所有缺失的全局序号（用于输出机器读取文件）
+        all_missing_indices = set()
+        
+        for fname, missing in missing_reports.items():
+            missing_str = format_missing_ranges(missing)
+            print(f"  📄 {fname}: 缺少 {len(missing)} 片 -> [{missing_str}]")
+            all_missing_indices.update(missing)
+            
+        # 自动生成供 gen_patch_slideshow.py 读取的配置文件
+        patch_file_path = os.path.join(output_dir, "missing_patches.txt")
+        with open(patch_file_path, "w", encoding="utf-8") as pf:
+            for fname, missing in missing_reports.items():
+                # 将该文件的缺失序号转为逗号分隔的字符串
+                missing_str = ",".join(str(x) for x in sorted(missing))
+                # 写入格式: 文件名|1,2,3,4
+                pf.write(f"{fname}|{missing_str}\n")
+        print("-" * 55)
+        print(f"  🤖 已生成自动补丁配置文件:\n     {patch_file_path}")
+
+    # ==========================================
+    # 新增逻辑：基于 Manifest 检查整文件丢失
+    # ==========================================
+    manifest_path = os.path.join(output_dir, "_manifest.txt")
+    if os.path.exists(manifest_path):
+        print("-" * 55)
+        print("🔍 执行全局文件完整性校验 (Manifest)")
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as mf:
+                expected_files = set(line.strip() for line in mf if line.strip())
+            
+            # 实际发现的文件集合（剔除清单文件本身）
+            actual_files = set(file_groups.keys())
+            if "_manifest.txt" in actual_files:
+                actual_files.remove("_manifest.txt")
+            
+            # 找出在清单中，但完全没有被扫描到的文件
+            completely_missing_files = expected_files - actual_files
+            
+            if completely_missing_files:
+                print(f"  🚨 发现 {len(completely_missing_files)} 个文件完全丢失 (0个片段被扫描到):")
+                for missing_file in sorted(completely_missing_files):
+                    print(f"     ❌ {missing_file}")
+                
+                # 追加到 missing_patches.txt 中，标记为丢失所有片段
+                patch_file_path = os.path.join(output_dir, "missing_patches.txt")
+                with open(patch_file_path, "a", encoding="utf-8") as pf:
+                    for missing_file in sorted(completely_missing_files):
+                        pf.write(f"{missing_file}|ALL\n")
+                print("  🤖 完全丢失的文件已追加至 missing_patches.txt (标记为ALL)")
+            else:
+                print("  ✅ 校验通过：没有发生整文件级别的丢失。")
+        except Exception as e:
+            print(f"  ⚠️ 读取或比对清单文件时发生错误: {e}")
+    else:
+        # 如果是单文件处理或清单本身丢失
+        if len(file_groups) > 1:
+            print("-" * 55)
+            print("  ⚠️ 未找到 _manifest.txt。")
+            print("     如果源端生成了清单，这说明清单的二维码已完全丢失，无法进行整文件丢失校验。")
+
     print("=" * 55)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("用法: python3 decode_qr_v3.py <截图目录> [输出目录] [-jN]")
-        print()
-        print("示例:")
-        print("  python3 decode_qr_v3.py ./screenshots/")
-        print("  python3 decode_qr_v3.py ./screenshots/ ./restored/")
-        print("  python3 decode_qr_v3.py ./screenshots/ ./restored/ -j4")
-        print()
-        print("选项:")
-        print("  -jN   并行进程数，默认为 CPU 核心数")
-        print("        例: -j4 表示4进程, -j1 表示单进程（调试用）")
-        print()
-        print("说明:")
-        print("  把所有截图丢到一个文件夹里（支持子目录），脚本自动:")
-        print("  1. 递归扫描所有子目录中的截图")
-        print("  2. 多进程并行识别二维码（自动选择最佳引擎）")
-        print("  3. 按文件名自动分组")
-        print("  4. 检查每个文件的片段完整性")
-        print("  5. 逐个还原为原始文件")
-        print()
-        print("依赖安装:")
-        print("  pip3 install opencv-python pillow")
-        print()
-        print("可选（提升识别率）:")
-        print("  brew install zbar       # macOS")
-        print("  apt install libzbar0    # Linux")
-        print("  pip3 install pyzbar")
         sys.exit(1)
 
     # 解析参数
