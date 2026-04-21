@@ -37,37 +37,43 @@ def generate_patch_slideshow(qr_output_dir, missing_tasks, cols=3, rows=3, inter
             tasks_by_file[fname] = []
         tasks_by_file[fname].append(idx)
 
-    # 2. 预扫描子目录，建立文件夹名称映射表
-    dir_map = {}
+    # 2. 预扫描子目录，建立所有目录路径的列表 (放弃有缺陷的字典覆写机制)
+    all_dirs = []
     for root, dirs, _ in os.walk(qr_output_dir):
-        # 记录每个文件夹的名称与其完整路径
-        folder_name = os.path.basename(root)
-        dir_map[folder_name] = root
+        all_dirs.append(root)
 
-    # 3. 按文件粒度进行提取
+    # 3. 按文件粒度进行精准提取
     for fname, indices in tasks_by_file.items():
-        fname_base = os.path.splitext(fname)[0]
+        pure_fname = os.path.basename(fname) 
+        fname_base = os.path.splitext(pure_fname)[0]
+        
         target_dir = None
         
-        # 寻找该文件对应的二维码文件夹
-        # 优先级1：文件夹名与完整文件名完全一致
-        if fname in dir_map:
-            target_dir = dir_map[fname]
-        # 优先级2：文件夹名与去掉后缀的文件名一致
-        elif fname_base in dir_map:
-            target_dir = dir_map[fname_base]
-        # 优先级3：子串包含匹配
+        # 优先级1：尝试直接拼接完整的相对路径 (如果二维码输出保留了原始目录树)
+        exact_path = os.path.normpath(os.path.join(qr_output_dir, fname))
+        if os.path.isdir(exact_path):
+            target_dir = exact_path
         else:
-            for dname, dpath in dir_map.items():
-                if fname_base in dname:
-                    target_dir = dpath
-                    break
+            # 优先级2：在所有目录中搜寻，处理可能被压平(Flatten)的目录或同名冲突
+            candidates = []
+            for dpath in all_dirs:
+                dname = os.path.basename(dpath)
+                # 严格限制：文件夹名必须完全一致，防止短名匹配到长名
+                if dname == pure_fname or dname == fname_base:
+                    candidates.append(dpath)
+            
+            if candidates:
+                # 解决同名文件冲突：利用缺失报告中的父目录特征(如 ncv 或 vcs)进行二次筛选
+                target_dir = candidates[0] # 默认取第一个
+                norm_fname = os.path.normpath(fname)
+                for cand in candidates:
+                    if norm_fname in os.path.normpath(cand):
+                        target_dir = cand
+                        break
         
         if not target_dir:
             print(f"  ⚠️ 未找到 [{fname}] 对应的存放目录，已跳过")
             continue
-            
-        print(f"\n  📁 定位目录: {fname} -> {os.path.relpath(target_dir, qr_output_dir)}")
         
         # 4. 确定要提取的最终序号集合
         target_indices = set()
