@@ -13,7 +13,11 @@ import math
 import json
 
 def collect_image_files(qr_output_dir):
-    """收集目录下所有的图片文件路径 (相对于 qr_output_dir)"""
+    """收集目录下所有的图片文件路径 (相对于 qr_output_dir)
+
+    清单和哨兵 QR 码会被提到最前面，并在末尾重复一次，
+    以最大限度保证即使截图中断也能捕获到清单信息。
+    """
     img_files = []
     # 扫描 svg 和 png
     for root, dirs, files in os.walk(qr_output_dir):
@@ -24,7 +28,16 @@ def collect_image_files(qr_output_dir):
                 full_path = os.path.join(root, f)
                 rel_path = os.path.relpath(full_path, qr_output_dir)
                 img_files.append(rel_path)
-    return img_files
+
+    # 将清单(_manifest.txt)和哨兵(_manifest_count.txt)提到最前面，
+    # 并在末尾重复一次，确保截图中断时仍能捕获清单信息
+    meta_prefixes = ('_manifest.txt', '_manifest_count.txt')
+    meta_imgs = [p for p in img_files if any(p.startswith(pfx) for pfx in meta_prefixes)]
+    data_imgs = [p for p in img_files if not any(p.startswith(pfx) for pfx in meta_prefixes)]
+
+    if meta_imgs:
+        return meta_imgs + data_imgs + meta_imgs
+    return data_imgs
 
 def generate_slideshow(qr_output_dir, interval=5, cols=5, rows=3):
     img_relative_paths = collect_image_files(qr_output_dir)
@@ -37,8 +50,17 @@ def generate_slideshow(qr_output_dir, interval=5, cols=5, rows=3):
     total_frames = math.ceil(len(img_relative_paths) / batch_size)
     total_sec = total_frames * interval
 
+    # 统计清单/哨兵重复的数量
+    meta_prefixes = ('_manifest.txt', '_manifest_count.txt')
+    meta_count = sum(1 for p in img_relative_paths if any(p.startswith(pfx) for pfx in meta_prefixes))
+    # 重复部分占一半（前置+尾部各一份）
+    meta_unique = meta_count // 2 if meta_count > 0 else 0
+    data_count = len(img_relative_paths) - meta_count
+
     print(f"📂 扫描目录: {qr_output_dir}")
-    print(f"🖼️  找到 {len(img_relative_paths)} 个图片文件")
+    print(f"🖼️  找到 {data_count + meta_unique} 个图片文件")
+    if meta_unique > 0:
+        print(f"📋 清单二维码首尾重复播放: {meta_unique} 张 × 2 = {meta_count} 张")
     print(f"🔲 矩阵布局: {cols} 列 x {rows} 行 (每屏 {batch_size} 张)")
     print(f"⏱️  每屏显示: {interval} 秒")
     print(f"⏳ 预计总时间: {total_sec // 60} 分 {total_sec % 60} 秒 ({total_frames} 帧)")

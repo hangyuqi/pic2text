@@ -20,17 +20,19 @@
 ### 第一阶段：服务器端（断网环境）
 
 **1. 生成二维码（含压缩与纠错）**
-运行 `gen_terminal_qr_v3.py` 将目标文件/文件夹转换为一系列 SVG 二维码文件。在此步骤中，脚本会自动执行**智能压缩**（对比 LZMA 和 Zlib）以最大限度减少二维码数量，并允许设置**纠错等级**以应对截图时内网水印、早点以及屏幕反光。同时还会在生成文件夹中输出generation_record.txt文件记录生成的每份文件信息，以及_manifest.txt文件负责记录总共对哪些文件进行了编码，用于在接收端进行文件数量的比对。
+运行 `gen_terminal_qr_v4.py` 将目标文件/文件夹转换为一系列 SVG 二维码文件。v4 采用 **V2 载荷格式**（Base32 + QR Alphanumeric 模式），单码容量较 v3 提升约 60%，总片数约减少 25%。脚本支持多进程并行渲染（`-jN`），并自动选择 LZMA/Zlib 最优压缩。生成文件夹中同样输出 `generation_record.txt` 和 `_manifest.txt`，用于接收端文件完整性校验。
 ```bash
-python gen_terminal_qr_v3.py <目标路径> L --strip
+python gen_terminal_qr_v4.py <目标路径> L --strip
+# 示例：使用 8 核并行渲染
+python gen_terminal_qr_v4.py <目标路径> L --strip -j8
 ```
 
 **2. 生成轮播页面**
-运行 `gen_slideshow_v3.py` 将生成的 SVG 文件夹合并为一个 HTML 轮播页面。支持用户输入行和列让每张页面显示更多的二维码从而加速截图过程。
+运行 `gen_slideshow_v4.py` 将生成的 SVG 文件夹合并为一个 HTML 轮播页面。v4 改用外部 `<img>` 引用代替内联 SVG，解决了大项目下浏览器因页面体积过大而崩溃的问题。支持用户输入行和列让每张页面显示更多的二维码从而加速截图过程。
 ```bash
-python gen_slideshow_v3.py <二维码输出目录> [每张显示秒数] [列] [行]
+python gen_slideshow_v4.py <二维码输出目录> [每张显示秒数] [列] [行]
 # 示例：每张显示 3 秒，每张3行5列共15张二维码
-python gen_slideshow_v3.py qr_output_my_designs/ 3 5 3 
+python gen_slideshow_v4.py qr_output_my_designs/ 3 5 3 
 ```
 
 **3. 启动播放**
@@ -57,11 +59,11 @@ python3 auto_capture.py 1000 2 ./screenshots/
 ### 第三阶段：数据还原（本地端）
 
 **5. 解析与恢复**
-运行 `decode_qr_v3.py` 对采集到的截图进行识别和文件还原。对每个文件的完整性进行校验，以及对文件数量进行校验，解码完成后会在目标文件夹下生成missing_patches.txt文件，该文件记录了有缺失文件的缺失序号和缺失的文件。
+运行 `decode_qr_v4.py` 对采集到的截图进行识别和文件还原。v4 仅解码由 `gen_terminal_qr_v4.py` 生成的 V2 格式二维码（历史 v3 编码请继续使用 `decode_qr_v3.py`）。对每个文件的完整性进行校验，以及对文件数量进行校验，解码完成后会在目标文件夹下生成 `missing_patches.txt` 文件，该文件记录了有缺失文件的缺失序号和缺失的文件。
 ```bash
-python3 decode_qr_v3.py <截图目录> [输出目录] [-jN]
+python3 decode_qr_v4.py <截图目录> [输出目录] [-jN]
 # 示例：使用 8 核并行解码
-python3 decode_qr_v3.py ./screenshots/ ./restored/ -j8
+python3 decode_qr_v4.py ./screenshots/ ./restored/ -j8
 ```
 
 ---
@@ -78,24 +80,24 @@ python3 gen_patch_slideshow.py -f missing_patches.txt -i 3
 
 ## 📦 工具详情
 
-### 1. `gen_terminal_qr_v3.py` (编码器)
-- **功能**：文件 $\to$ 压缩 $\to$ Base64 $\to$ 二维码分片。
-- **特性**：支持 Verilog 专项优化（去注释/压空白），自动选择 LZMA/Zlib 最佳压缩率。
+### 1. `gen_terminal_qr_v4.py` (编码器)
+- **功能**：文件 $\to$ 压缩 $\to$ Base32 $\to$ 二维码分片。
+- **特性**：V2 载荷格式（QR Alphanumeric 模式），单码容量较 v3 提升约 60%；多进程并行渲染（`-jN`）；支持 Verilog 专项优化（去注释/压空白），自动选择 LZMA/Zlib 最佳压缩率。
 
-### 2. `gen_slideshow_v3.py` (页面生成器)
+### 2. `gen_slideshow_v4.py` (页面生成器)
 - **功能**：SVG 文件夹 $\to$ `slideshow.html`。
-- **特性**：强制 SVG 1:1 正方形显示，防止浏览器拉伸；内置白屏闪烁机制作为帧分隔，提高识别率。
+- **特性**：改用外部 `<img>` 引用，解决大项目内联 SVG 导致浏览器崩溃的问题；强制 SVG 1:1 正方形显示，防止浏览器拉伸；内置白屏闪烁机制作为帧分隔，提高识别率；清单二维码首尾重复播放，防止截图中断丢失元数据。
 
 ### 3. `auto_capture.py` (自动采集器)
 - **功能**：定时全屏截图 $\to$ PNG 图片。
 - **特性**：集成 `caffeinate` 防止 Mac 休眠；采样率高于翻页率，通过解码端自动去重确保数据完整。
 
-### 4. `decode_qr_v3.py` (解码器)
+### 4. `decode_qr_v4.py` (解码器)
 - **功能**：截图 $\to$ 识别 $\to$ 拼接 $\to$ 解压 $\to$ 原始文件。
-- **特性**：多引擎识别（pyzbar $\to$ zbar $\to$ OpenCV），多进程并行加速。
+- **特性**：仅解码 V2 格式（Base32 载荷）；多引擎识别（pyzbar $\to$ libzbar ctypes直连 $\to$ OpenCV），多进程并行加速。历史 v1/v3 编码请使用 `decode_qr_v3.py`。
 
 ### 5. `gen_patch_slideshow.py` (补丁页面生成器)
-- **功能**：读取文件missing_patches.txt $\to$ 重新生成补丁html文件。
+- **功能**：读取 `missing_patches.txt` $\to$ 重新生成补丁 html 文件。
 
 ---
 
@@ -105,7 +107,8 @@ python3 gen_patch_slideshow.py -f missing_patches.txt -i 3
 `原始文件` $\to$ `预处理` $\to$ `智能压缩 (LZMA/Zlib)` $\to$ `Base64` $\to$ `分片 (带纠错等级)` $\to$ `SVG` $\to$ `HTML轮播` $\to$ `全屏截图` $\to$ `多引擎识别` $\to$ `还原`
 
 ### QR 载荷格式
-`相对路径 | 序号/总数 | 数据分片`
+- **v4（当前）**：`V2:FNAMEB32:IDX/TOTAL:TAG:DATAB32`（QR Alphanumeric 模式，Base32 编码）
+- **v3（历史）**：`相对路径 | 序号/总数 | 数据分片`（Byte 模式，Base64 编码）
 
 ### 依赖项
 - **服务器端**：`pyqrcode`
